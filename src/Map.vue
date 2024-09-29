@@ -102,6 +102,27 @@
               {{ mouseKeypad }}
             </div>
 
+            <!-- CALCULATE AREA RESULT DIALOG -->
+            <v-dialog
+              v-model="calcResultShow"
+              max-width="500">
+              <v-card>
+                <v-card-title>Calculate Result</v-card-title>
+                <v-card-text>
+                  <v-list>
+                    <v-list-item
+                      v-for="(item, index) in calcResultData"
+                      :key="index">
+                      <v-list-item-content>{{ item.angle }} ° , {{ item.mil }} mil<br></v-list-item-content>
+                    </v-list-item>
+                  </v-list>
+                </v-card-text>
+                <v-card-actions>
+                  <v-btn @click.native="calcResultShow = false">Close</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
+
             <!--BOTTOM RIGHT FLOATING ACTION BUTTON-->
             <v-dialog
               v-model="placePinVars.dialog"
@@ -821,6 +842,41 @@
           </v-list-tile>
         </v-list-group>
       </v-list>
+
+      <!--'REMOTE SYNC' SECTION-->
+      <v-list class="pa-0">
+        <v-list-group>
+          <v-list-tile slot="activator">
+            <v-list-tile-content>
+              <v-list-tile-title>Remote Sync</v-list-tile-title>
+            </v-list-tile-content>
+          </v-list-tile>
+          <v-list-tile>
+            <v-list-tile-content>
+              <input
+                type="text"
+                v-model="calcSendUrl"
+                placeholder="Enter url here">
+            </v-list-tile-content>
+          </v-list-tile>
+          <v-list-tile>
+            <v-list-tile-content>
+              <v-btn
+                color="primary"
+                @click="calcAllTarget"
+                style="min-width: 70px">Calculate</v-btn>
+            </v-list-tile-content>
+          </v-list-tile>
+          <v-list-tile>
+            <v-list-tile-content>
+              <v-btn
+                color="primary"
+                @click="calcAllTargetAndSend"
+                style="min-width: 70px">Calculate & Send</v-btn>
+            </v-list-tile-content>
+          </v-list-tile>
+        </v-list-group>
+      </v-list>
       <v-spacer/>
       <a
         href="https://www.netlify.com"
@@ -834,14 +890,15 @@
 </template>
 
 <script>
+import axios from "axios";
 import {
   CRS, LatLng, LatLngBounds, Map, Point, Polyline, Rectangle, Transformation,
 } from "leaflet";
 import Vue from "vue";
 // required for Vuetify's a-la-carte functionality
-import "vuetify/src/stylus/app.styl";
+import Raven from "raven-js";
+import semver from "semver";
 import {
-  Vuetify,
   VApp,
   VBadge,
   VBtn,
@@ -849,13 +906,13 @@ import {
   VCard,
   VDialog,
   VDivider,
-  VForm,
   VFooter,
-  VInput,
+  VForm,
   VGrid,
   VIcon,
-  VList,
+  VInput,
   VLabel,
+  VList,
   VMenu,
   VNavigationDrawer,
   VSelect,
@@ -864,14 +921,15 @@ import {
   VSwitch,
   VTextField,
   VToolbar,
+  Vuetify,
 } from "vuetify";
-import Raven from "raven-js";
-import semver from "semver";
+import "vuetify/src/stylus/app.styl";
 
 import githubIcon from "./assets/svg/github.svg";
 
-import SquadGrid from "./assets/Leaflet_extensions/SquadGrid";
 import LocationLayer from "./assets/Leaflet_extensions/LocationLayer";
+import SquadGrid from "./assets/Leaflet_extensions/SquadGrid";
+import MapData from "./assets/MapData";
 import * as Utils from "./assets/Utils";
 import {
   COLORS,
@@ -880,14 +938,13 @@ import {
   PIN_TYPE,
   TARGET_TYPE,
 } from "./assets/Vars";
-import MapData from "./assets/MapData";
 
 import { version as pkgVersion } from "../package.json";
 import SubtargetsHolder from "./assets/SubtargetsHolder";
-import PinHolder from "./assets/marker/pin/PinHolder";
-import MortarPin from "./assets/marker/pin/MortarPin";
-import TargetPin from "./assets/marker/pin/TargetPin";
 import FobPin from "./assets/marker/pin/FobPin";
+import MortarPin from "./assets/marker/pin/MortarPin";
+import PinHolder from "./assets/marker/pin/PinHolder";
+import TargetPin from "./assets/marker/pin/TargetPin";
 
 Vue.use(Vuetify, {
   components: {
@@ -1052,6 +1109,9 @@ export default {
 
       githubIcon,
       ravenError: false,
+      calcSendUrl: "http://localhost:16900/mil",
+      calcResultData: [], // after calcuate all the area target result
+      calcResultShow: false, // result dialog toggle
     };
   },
   mounted() {
@@ -1706,6 +1766,39 @@ export default {
       this.dragging = false;
       this.updateSubTargets(false);
       this.calcAndUpdate(false);
+    },
+    calcAllTargetAndSend() {
+      const url = this.calcSendUrl;
+      const results = this.calcAllTarget();
+      axios.post(url, results)
+        .then(() => {
+          console.log("Success send to ", url);
+        })
+        .catch((error) => {
+          console.log("Failed send to ", url);
+          console.log(error);
+        });
+      return results;
+    },
+    calcAllTarget() {
+      const results = this.subTargetsHolder.targets.map((subt) => {
+        const cSubTargetPos = subt.pos;
+        const settings = this.calcMortarSettings(this.mortar.pos, cSubTargetPos);
+        const angle = Utils.pad((Math.round(settings.bearing * 10) / 10).toFixed(1), 5);
+        let mil = 0;
+        if (Number.isNaN(settings.elevation) || settings.elevation > 1580 || settings.elevation < 800) {
+          mil = 0;
+        } else {
+          mil = Utils.pad((Math.round(settings.elevation * 10) / 10).toFixed(1), 6);
+        }
+        return { angle, mil, ...settings };
+      });
+      // sort by mil
+      results.sort((a, b) => a.mil - b.mil);
+      console.log("calcAllTarget", results);
+      this.calcResultData = results;
+      this.calcResultShow = true;
+      return results;
     },
     calcAndUpdate(delayUpdate = this.delayCalcUpdate) {
       console.log("calcAndUpdate", this.mortar, this.target, this.secondaryTarget);
